@@ -1,6 +1,7 @@
 -module(app_test).
--include("../include/tftest.hrl").
 -compile(export_all).
+
+-include("tftest.hrl").
 
 -record(frame, {fin     = true,
                 rsv     = 0,
@@ -997,7 +998,12 @@ do_test_unfragmented_valid_utf8(WSPath, BlockSz) ->
     Fun(<<16#f0,16#90,16#80,16#80>>),
     Fun(<<16#7f>>),
     Fun(<<16#df,16#bf>>),
-    Fun(<<16#ef,16#bf,16#bf>>),
+
+    case yaws_dynopts:have_bad_unicode() of
+        true  -> ok;
+        false -> Fun(<<16#ef,16#bf,16#bf>>)
+    end,
+
     Fun(<<16#f4,16#8f,16#bf,16#bf>>),
     Fun(<<16#ed,16#9f,16#bf>>),
     Fun(<<16#ee,16#80,16#80>>),
@@ -1545,7 +1551,7 @@ test_too_big_frame() ->
     ?line {ok, Sock}     = open("localhost", 8000),
     ?line {ok, {101, _}} = wsopen(Sock, Key, WSPath, "http://localhost", 13),
 
-    Payload1 = crypto:rand_bytes(16*1024*1024),
+    Payload1 = yaws_dynopts:rand_bytes(16*1024*1024),
     SndFrame1 = #frame{opcode=?WS_OPCODE_BINARY, payload=Payload1},
     ?line ok  = send_frame(Sock, SndFrame1, all),
     ?line {ok, RcvFrame} = read_frame(Sock),
@@ -1554,9 +1560,15 @@ test_too_big_frame() ->
 
     Payload2 = <<0, Payload1/binary>>,
     SndFrame2 = #frame{opcode=?WS_OPCODE_BINARY, payload=Payload2},
-    ?line ok   = send_frame(Sock, SndFrame2, all),
+    ?line {ok, Closed} = case send_frame(Sock, SndFrame2, all) of
+                             ok -> {ok, false};
+                             {error, closed} -> {ok, true}
+                         end,
     ?line {ok, Frames} = wsflush(Sock, true),
-    ?line true = is_valid_close_frame(Frames, [?WS_STATUS_MSG_TOO_BIG]),
+    ?line true = case Closed of
+                     false -> is_valid_close_frame(Frames, [?WS_STATUS_MSG_TOO_BIG]);
+                     true -> true
+                 end,
     ?line ok   = close(Sock),
     ok.
 
@@ -1588,7 +1600,7 @@ test_too_big_message() ->
     ?line {ok, Sock}     = open("localhost", 8000),
     ?line {ok, {101, _}} = wsopen(Sock, Key, WSPath, "http://localhost", 13),
 
-    Payload1 = crypto:rand_bytes(16*1024*1024),
+    Payload1 = yaws_dynopts:rand_bytes(16*1024*1024),
     <<Frag1:(4*1024)/binary, Frag2:(4*1024)/binary,
       Frag3:(4*1024)/binary, Frag4/binary>> = Payload1,
     SndFrame1 = #frame{fin=false, opcode=?WS_OPCODE_BINARY, payload=Frag1},
@@ -1732,7 +1744,7 @@ wsflush(Sock, WithTcpClose, Acc) ->
 %% ----
 is_valid_handshake_hash(Key, Hash) ->
     Salted = Key ++ "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
-    HashBin = crypto:sha(Salted),
+    HashBin = yaws_dynopts:hash(Salted),
     Hash == base64:encode_to_string(HashBin).
 
 

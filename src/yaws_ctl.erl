@@ -18,7 +18,8 @@
 
 -export([start/2, actl_trace/1]).
 -export([ls/1,hup/1,stop/1,status/1,load/1,
-         check/1,trace/1, debug_dump/1, stats/1, running_config/1]).
+         check/1,trace/1, debug_dump/1, stats/1, running_config/1,
+         configtest/1]).
 %% internal
 -export([run/1, aloop/3, handle_a/3]).
 
@@ -55,9 +56,9 @@ run(GC) ->
 rand() ->
     case os:type() of
         {win32, _} ->
-            {A1, A2, A3}=now(),
-            random:seed(A1, A2, A3),
-            random:uniform(1 bsl 64);
+            {A1, A2, A3}=yaws:get_time_tuple(),
+            yaws_dynopts:random_seed(A1, A2, A3),
+            yaws_dynopts:random_uniform(1 bsl 64);
         _ ->
             try
                 crypto:start(),
@@ -65,9 +66,9 @@ rand() ->
             catch
                 _:_ ->
                     error_logger:warning_msg("Running without crypto app\n"),
-                    {A1, A2, A3}=now(),
-                    random:seed(A1, A2, A3),
-                    random:uniform(1 bsl 64)
+                    {A1, A2, A3}=yaws:get_time_tuple(),
+                    yaws_dynopts:random_seed(A1, A2, A3),
+                    yaws_dynopts:random_uniform(1 bsl 64)
             end
     end.
 
@@ -200,31 +201,31 @@ actl_trace(What) ->
         true ->
             {ok, GC, SCs} = yaws_api:getconf(),
             case GC#gconf.trace of
-                false when What /= off->
+                false when What /= off ->
                     yaws_api:setconf(GC#gconf{trace = {true, What}},SCs),
                     io_lib:format(
-                      "Turning on trace of ~p to file ~s~n",
+                      "Turning on trace of ~p to directory ~s~n",
                       [What,
                        filename:join([GC#gconf.logdir,
-                                      "trace." ++ atom_to_list(What)])]);
+                                      yaws_trace:get_tracedir()])]);
                 false when What == off ->
                     io_lib:format("Tracing is already turned off ~n",[]);
                 {true, _} when What == off ->
                     yaws_api:setconf(GC#gconf{trace = false},SCs),
                     "Turning trace off \n";
                 {true, What} ->
-                    io_lib:format("Trace of ~p is already turned on, ose 'off' "
+                    io_lib:format("Trace of ~p is already turned on, use 'off' "
                                   "to turn off~n", [What]);
                 {true, _Other} ->
                     yaws_api:setconf(GC#gconf{trace = {true, What}},SCs),
                     io_lib:format(
-                      "Turning on trace of ~p to file ~s~n",
+                      "Turning on trace of ~p to directory ~s~n",
                       [What,
                        filename:join([GC#gconf.logdir,
-                                      "trace." ++ atom_to_list(What)])])
+                                      yaws_trace:get_tracedir()])])
             end;
         false ->
-            "Need either http | traffic | off  as argument\n"
+            "error: need one of http | traffic | off as argument\n"
     end.
 
 
@@ -270,23 +271,8 @@ vsn(IP) when size(IP) =:= 4 ->
 vsn(IP) when size(IP) =:= 8 ->
     "(ipv6)".
 
--define(IPV4_FMT, "~p.~p.~p.~p").
--define(IPV6_FMT,
-        "~2.16.0b~2.16.0b:~2.16.0b~2.16.0b:~2.16.0b~2.16.0b:~2.16.0b~2.16.0b").
-
 format_ip(IP) ->
-    case size(IP) of
-        4 ->
-            {A, B, C, D} = IP,
-            io_lib:format(?IPV4_FMT,
-                          [A, B, C, D]);
-
-        8 ->
-            {A, B, C, D, E, F, G, H} = IP,
-            io_lib:format(?IPV6_FMT,
-                          [A, B, C, D, E, F, G, H])
-    end.
-
+    inet_parse:ntoa(IP).
 
 a_running_config(Sock) ->
     gen_tcp:send(Sock, a_running_config()).
@@ -574,3 +560,17 @@ stats([SID]) ->
 running_config([SID]) ->
     actl(SID, running_config).
 
+configtest([File]) ->
+
+    Env = #env{debug = false, conf  = {file, File}},
+    case catch yaws_config:load(Env) of
+        {ok, _GC, _SCs} ->
+            io:format("Syntax OK~n"),
+            timer:sleep(100),erlang:halt(0);
+        {error, Error} ->
+            io:format("Syntax error in file ~p:~n~s~n", [File, Error]),
+            timer:sleep(100),erlang:halt(1);
+        Other ->
+            io:format("Syntax error in file ~p:~n~p~n", [File, Other]),
+            timer:sleep(100),erlang:halt(1)
+    end.
